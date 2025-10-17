@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1"/>
+  <title>Hallväder + Dagens text</title>
+  <style>
+    :root{
+      --bg:#0f1115; --fg:#e8eaed; --muted:#a7b0bc; --card:#151922;
+      --accent:#5aa7ff;
+    }
+    html,body{height:100%}
+    body{
+      margin:0; background:var(--bg); color:var(--fg); font:500 20px/1.4 system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial;
+      overflow:hidden;
+    }
+    .grid{
+      display:grid; grid-template-columns: 1.1fr 1.6fr; grid-auto-rows: 100%;
+      gap:20px; padding:24px; height:100vw; width:100vh; /* rotated trick */
+      transform:rotate(90deg); transform-origin: left top; position:absolute; top:0; left:0;
+    }
+    @media (orientation:landscape){
+      .grid{ height:100vh; width:100vw; transform:none; position:static;}
+    }
+    .card{
+      background:linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02));
+      border:1px solid rgba(255,255,255,0.06);
+      border-radius:24px; padding:24px; box-shadow:0 10px 30px rgba(0,0,0,0.35);
+    }
+    .weather{display:flex; flex-direction:column; height:100%}
+    .row{display:flex; align-items:baseline; gap:16px; flex-wrap:wrap}
+    .temp{font-size:80px; font-weight:700; letter-spacing:-2px}
+    .badge{padding:6px 10px; border-radius:999px; background:#1b2230; color:var(--muted); font-size:14px}
+    .muted{color:var(--muted)}
+    .city{font-size:28px; font-weight:650}
+    .big{font-size:18px}
+    .stats{display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-top:16px}
+    .stat{background:var(--card); border-radius:16px; padding:14px; text-align:center}
+    iframe{
+      width:100%; height:100%; border:0; border-radius:16px; background:var(--card);
+    }
+    .footer{margin-top:auto; font-size:14px; color:var(--muted)}
+    a{color:var(--accent); text-decoration:none}
+  </style>
+</head>
+<body>
+  <div class="grid">
+    <section class="card weather">
+      <div class="row">
+        <div class="city" id="city">–</div>
+        <span class="badge" id="time">—</span>
+      </div>
+      <div class="row" style="align-items:center; margin-top:8px">
+        <div class="temp" id="temp">–°</div>
+        <div class="big" id="summary">Hämtar väder…</div>
+      </div>
+      <div class="stats">
+        <div class="stat">Känns som<br><strong id="feels">–°</strong></div>
+        <div class="stat">Vind<br><strong id="wind">– m/s</strong></div>
+        <div class="stat">Nederbörd (1h)<br><strong id="precip">– mm</strong></div>
+      </div>
+      <div class="footer">
+        Data från <a href="https://open-meteo.com/" target="_blank" rel="noreferrer">Open-Meteo</a>. Uppdateras var 5:e minut.
+      </div>
+    </section>
+
+    <section class="card" style="overflow:hidden">
+      <!-- Simple embed of Dagens text (read-only). -->
+      <iframe title="Dagens text" src="https://wol.jw.org/sv/wol/dt/r14/lp-z"></iframe>
+    </section>
+  </div>
+
+<script>
+/* === CONFIG === */
+const CITY_NAME = "Stockholm";   // Change this to your city
+const TZ = "Europe/Stockholm";
+const REFRESH_MS = 5 * 60 * 1000;
+/* ============== */
+
+const wmo = {
+  0:"Klart", 1:"Mest klart", 2:"Växlande molnighet", 3:"Mulet",
+  45:"Dimma", 48:"Isdimma",
+  51:"Duggregn lätt", 53:"Duggregn måttligt", 55:"Duggregn kraftigt",
+  56:"Underkylt duggregn lätt", 57:"Underkylt duggregn kraftigt",
+  61:"Regn lätt", 63:"Regn", 65:"Regn kraftigt",
+  66:"Underkylt regn lätt", 67:"Underkylt regn kraftigt",
+  71:"Lätt snöfall", 73:"Snöfall", 75:"Kraftigt snöfall",
+  77:"Snökorn",
+  80:"Skurar lätta", 81:"Skurar", 82:"Skurar kraftiga",
+  85:"Snöbyar lätta", 86:"Snöbyar kraftiga",
+  95:"Åska", 96:"Åska med hagel", 99:"Kraftig åska med hagel"
+};
+
+const el = id => document.getElementById(id);
+
+async function geocodeCity(name){
+  const u = new URL("https://geocoding-api.open-meteo.com/v1/search");
+  u.searchParams.set("name", name);
+  u.searchParams.set("count", 1);
+  u.searchParams.set("language", "sv");
+  const r = await fetch(u.href);
+  const j = await r.json();
+  if(!j.results || !j.results.length) throw new Error("Hittade inte plats");
+  return j.results[0]; // {latitude, longitude, name, country}
+}
+
+async function fetchWeather(lat, lon){
+  const u = new URL("https://api.open-meteo.com/v1/forecast");
+  u.searchParams.set("latitude", lat);
+  u.searchParams.set("longitude", lon);
+  u.searchParams.set("current", ["temperature_2m","apparent_temperature","weather_code","wind_speed_10m","precipitation"].join(","));
+  u.searchParams.set("wind_speed_unit","ms");
+  u.searchParams.set("timezone", TZ);
+  const r = await fetch(u.href);
+  return await r.json();
+}
+
+function formatTime(){
+  const d = new Date();
+  return d.toLocaleString("sv-SE", { hour:"2-digit", minute:"2-digit", weekday:"long" });
+}
+
+async function load(){
+  try{
+    el("city").textContent = CITY_NAME;
+    el("time").textContent = formatTime();
+    const place = await geocodeCity(CITY_NAME);
+    const data = await fetchWeather(place.latitude, place.longitude);
+    const c = data.current;
+    el("temp").textContent  = Math.round(c.temperature_2m) + "°";
+    el("feels").textContent = Math.round(c.apparent_temperature) + "°";
+    el("wind").textContent  = (Math.round(c.wind_speed_10m*10)/10).toString() + " m/s";
+    el("precip").textContent= (c.precipitation ?? 0).toString() + " mm";
+    el("summary").textContent = wmo[c.weather_code] || "—";
+  }catch(err){
+    el("summary").textContent = "Kunde inte hämta väder.";
+    console.error(err);
+  }
+}
+load();
+setInterval(()=>{ el("time").textContent = formatTime(); }, 30*1000);
+setInterval(load, REFRESH_MS);
+</script>
+</body>
+</html>
